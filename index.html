@@ -68,8 +68,7 @@
         .review-opt { padding:10px 14px; border:1px solid #333; margin-bottom:7px; font-size:0.88rem; }
         .review-opt.chosen-wrong { border-color:var(--err); background:#1a0008; color:var(--err); }
         .review-opt.correct-ans { border-color:var(--succ); background:#001a0a; color:var(--succ); font-weight:bold; }
-        .review-opt.neutral { color:#fff; }
-        .opt-word { color:var(--neon); font-size:0.8rem; font-weight:600; }
+        .review-opt.neutral { color:#fff; font-weight:700; }
 
         /* ANALYSIS STYLES */
         .sol-box { background: #000; border: 1px solid #222; padding: 10px; margin-top: 10px; border-left: 3px solid var(--neon); font-size: 0.85rem; }
@@ -213,10 +212,13 @@
                 {id:'BEST_SYNO', name:'BEST SYNO', special:true}, {id:'SPELL', name:'SPELLINGS', special:true}, {id:'BEST_FIXED', name:'BEST FIXED', special:true}
             ];
 
+            const quizExclude = ['SPELL', 'HOMO'];
             cats.forEach(c => {
                 const style = c.special ? 'border-left-color:#00ccff' : '';
                 menu.innerHTML += `<div class="menu-card" onclick="ui.view('${c.id}')" style="${style}"><h3>${c.name}</h3></div>`;
-                qMenu.innerHTML += `<div class="menu-card" onclick="quiz.init('${c.id}')" style="${style}"><h3>${c.name} TESTS</h3></div>`;
+                if(!quizExclude.includes(c.id)) {
+                    qMenu.innerHTML += `<div class="menu-card" onclick="quiz.init('${c.id}')" style="${style}"><h3>${c.name} TESTS</h3></div>`;
+                }
             });
         },
 
@@ -501,7 +503,7 @@
                 let cls = 'neutral';
                 if (o.word === q.word) cls = 'correct-ans';
                 else if (o.word === u) cls = 'chosen-wrong';
-                return `<div class="review-opt ${cls}">${o.eng} <span class="opt-word">[${o.word}]</span></div>`;
+                return `<div class="review-opt ${cls}">${o.eng} <span style="color:var(--neon);font-size:0.8rem;font-weight:600;">[${o.word}]</span></div>`;
             }).join('');
 
             document.getElementById('review-card').innerHTML = `
