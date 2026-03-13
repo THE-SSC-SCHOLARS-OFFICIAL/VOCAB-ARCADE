@@ -353,27 +353,54 @@
             this._attKey = `${this.cat}__${l||'all'}__${setN}`;
             this._setN = setN;
             this._alpha = l; // store for "Other Sets" back nav
+            const isSynoCat = this.cat === 'SYNO' || this.cat === 'BEST_SYNO';
             this.q = pool.map(q => {
-                const dist = VOCAB_DATA[this.cat].filter(x=>x.word!==q.word).sort(()=>0.5-Math.random()).slice(0,3);
-                return { ...q, opts: [...dist, q].sort(()=>0.5-Math.random()) };
+                if (isSynoCat) {
+                    // Correct answer = first synonym from synos field (e.g. "Toil, Drudge" -> "Toil")
+                    const synList = q.synos ? q.synos.split(/[,\/]+/).map(s=>s.trim()).filter(Boolean) : [];
+                    const correctSyno = synList[0] || q.word;
+                    // Distractors = one synonym from 3 other random words that have synos
+                    const distractorWords = VOCAB_DATA[this.cat]
+                        .filter(x => x.word !== q.word && x.synos)
+                        .sort(() => 0.5 - Math.random())
+                        .slice(0, 3)
+                        .map(x => ({ word: x.synos.split(/[,\/]+/).map(s=>s.trim()).filter(Boolean)[0], meaning: x.eng }))
+                        .filter(x => x.word);
+                    const opts = [{ word: correctSyno, meaning: q.eng }, ...distractorWords].sort(() => 0.5 - Math.random());
+                    return { ...q, correctSyno, opts };
+                } else {
+                    const dist = VOCAB_DATA[this.cat].filter(x=>x.word!==q.word).sort(()=>0.5-Math.random()).slice(0,3);
+                    return { ...q, opts: [...dist, q].sort(()=>0.5-Math.random()) };
+                }
             });
             this.ans={}; this.idx=0; this.timeLeft=600; 
             ui.show('quiz-run'); this.render(); this.runTimer();
         },
         
+        isSyno() { return this.cat === 'SYNO' || this.cat === 'BEST_SYNO'; },
+
         render() {
             const q = this.q[this.idx];
             document.getElementById('q-prog').innerText = `${this.idx+1}/${this.q.length}`;
             document.getElementById('main-next-btn').innerText = (this.idx === this.q.length-1) ? 'FINISH' : 'NEXT';
-            
-            // FIXED: Using data attributes to safely handle special chars in Idioms
-            let h = `<div style="font-size:1.2rem;margin-bottom:15px;color:var(--neon)">${q.word}</div><div class="opt-grid">`;
-            q.opts.forEach(o => {
-                h += `<button class="opt-btn ${this.ans[this.idx]===o.word?'selected':''}" data-val="${o.word.replace(/"/g, '&quot;')}" onclick="quiz.sel(this.getAttribute('data-val'))">${o.eng}</button>`;
-            });
+
+            const syno = this.isSyno();
+            let h = `<div style="font-size:1.2rem;margin-bottom:15px;color:var(--neon);font-weight:700;">${q.word}</div><div class="opt-grid">`;
+            if (syno) {
+                // SYNO: opts are {word, meaning} objects, correct = q.correctSyno
+                q.opts.forEach(o => {
+                    const safeVal = o.word.replace(/"/g, '&quot;');
+                    h += `<button class="opt-btn ${this.ans[this.idx]===o.word?'selected':''}" data-val="${safeVal}" onclick="quiz.sel(this.getAttribute('data-val'))">${o.word}</button>`;
+                });
+            } else {
+                // OWS/others: opts are word objects, correct = q.word
+                q.opts.forEach(o => {
+                    h += `<button class="opt-btn ${this.ans[this.idx]===o.word?'selected':''}" data-val="${o.word.replace(/"/g,'&quot;')}" onclick="quiz.sel(this.getAttribute('data-val'))">${o.eng}</button>`;
+                });
+            }
             document.getElementById('q-area').innerHTML = h + `</div>`;
         },
-        
+
         sel(w) { this.ans[this.idx]=w; this.render(); },
         clear() { delete this.ans[this.idx]; this.render(); },
         next() { if(this.idx<this.q.length-1) { this.idx++; this.render(); } },
@@ -393,10 +420,11 @@
             if(!confirm("Submit final test?")) return;
             this.reset();
 
+            const isSynoCat = this.cat === 'SYNO' || this.cat === 'BEST_SYNO';
             let score = 0;
             this.q.forEach((q, i) => {
                 const u = this.ans[i];
-                const ok = u === q.word;
+                const ok = isSynoCat ? u === q.correctSyno : u === q.word;
                 if(ok) score++;
                 else if(u && !blunders.find(x => x.id === q.id)) {
                     blunders.push({...q, cat: quiz.cat});
@@ -410,7 +438,9 @@
                 const now = new Date();
                 const dateStr = now.toLocaleString('en-IN',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:true});
                 const savedAns = Object.assign({}, this.ans);
-                quizAttempts[this._attKey].push({ date: dateStr, score, total: this.q.length, ans: savedAns });
+                // Save the exact question pool (including opts) so review is always accurate
+                const savedQs = this.q.map(q => ({...q, opts: q.opts.map(o => ({...o}))}));
+                quizAttempts[this._attKey].push({ date: dateStr, score, total: this.q.length, ans: savedAns, qs: savedQs });
                 localStorage.setItem('ssc_attempts', JSON.stringify(quizAttempts));
             }
 
@@ -430,7 +460,7 @@
             this.idx = 0;
 
             const total = qs.length;
-            const wrong = qs.filter((q,i) => answers[i] && answers[i] !== q.word).length;
+            const wrong = qs.filter((q,i) => answers[i] && answers[i] !== (q.correctSyno || q.word)).length;
             const skipped = qs.filter((q,i) => !answers[i]).length;
             const correct = total - wrong - skipped;
 
@@ -450,7 +480,9 @@
         status(i) {
             const u = this.answers[i];
             if (!u) return 'skipped';
-            return u === this.qs[i].word ? 'correct' : 'wrong';
+            const q = this.qs[i];
+            const correct = (q.cat === 'SYNO' || q.cat === 'BEST_SYNO') ? q.correctSyno : q.word;
+            return u === correct ? 'correct' : 'wrong';
         },
 
         filteredIndices() {
@@ -499,17 +531,25 @@
             if (!q) { document.getElementById('review-card').innerHTML = '<div style="color:#666;text-align:center;padding:20px;">No questions in this filter.</div>'; return; }
 
             const u = this.answers[this.idx];
-            const ok = u === q.word;
+            const isSyno = q.cat === 'SYNO' || q.cat === 'BEST_SYNO';
+            const correctAns = isSyno ? q.correctSyno : q.word;
+            const ok = u === correctAns;
             const st = this.status(this.idx);
             const stColor = st === 'correct' ? 'var(--succ)' : st === 'wrong' ? 'var(--err)' : '#666';
             const stLabel = st === 'correct' ? '✓ CORRECT' : st === 'wrong' ? '✗ WRONG' : '— SKIPPED';
-
-            let optsHtml = q.opts.map(o => {
-                let cls = 'neutral';
-                if (o.word === q.word) cls = 'correct-ans';
-                else if (o.word === u) cls = 'chosen-wrong';
-                return `<div class="review-opt ${cls}">${o.eng} <span style="color:var(--neon);font-size:0.8rem;font-weight:600;">[${o.word}]</span></div>`;
-            }).join('');
+            let optsHtml = isSyno
+                ? q.opts.map(o => {
+                    let cls = 'neutral';
+                    if (o.word === correctAns) cls = 'correct-ans';
+                    else if (o.word === u) cls = 'chosen-wrong';
+                    return `<div class="review-opt ${cls}">${o.word} <span style="color:var(--neon);font-size:0.8rem;font-weight:600;">[${o.meaning}]</span></div>`;
+                }).join('')
+                : q.opts.map(o => {
+                    let cls = 'neutral';
+                    if (o.word === correctAns) cls = 'correct-ans';
+                    else if (o.word === u) cls = 'chosen-wrong';
+                    return `<div class="review-opt ${cls}">${o.eng} <span style="color:var(--neon);font-size:0.8rem;font-weight:600;">[${o.word}]</span></div>`;
+                }).join('');
 
             document.getElementById('review-card').innerHTML = `
                 <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:14px;">
@@ -525,11 +565,11 @@
                 <div style="margin-bottom:14px;">${optsHtml}</div>
 
                 <div class="sol-box">
-                    <div style="font-size:0.72rem; font-family:'Orbitron'; color:#666; margin-bottom:8px; letter-spacing:1px;">SOLUTION</div>
-                    <div class="main-def" style="color:var(--succ); font-size:1rem;">${q.eng}</div>
-                    <div class="sec-mean" style="margin-top:5px;">हिंदी: ${q.hindi}</div>
+                    <div style="font-size:0.72rem; font-family:'Orbitron'; color:#888; margin-bottom:8px; letter-spacing:1px;">SOLUTION</div>
+                    <div style="color:var(--neon); font-weight:700; font-size:1rem; margin-top:3px; line-height:1.4;">${q.eng}</div>
+                    <div style="font-size:0.9rem; color:#fff; margin-top:5px;">हिंदी: ${q.hindi}</div>
                     ${q.synos ? `<div class="v-syno" style="margin-top:6px;">Syn: ${q.synos}</div>` : ''}
-                    ${q.ex ? `<div class="v-ex" style="margin-top:8px;">${q.ex}</div>` : ''}
+                    ${q.ex ? `<div style="font-size:0.85rem; color:#00cc55; margin-top:8px; font-style:italic; padding-left:10px; border-left:2px solid #00cc55;">${q.ex}</div>` : ''}
                     ${u && !ok ? `<div style="margin-top:10px; font-size:0.8rem; color:var(--err);">Your answer: ${u}</div>` : ''}
                 </div>`;
         }
@@ -694,14 +734,22 @@
         reviewOld(attKey, idx) {
             this.close();
             const att = quizAttempts[attKey][idx];
-            // Rebuild quiz question pool from the saved attempt (same set)
-            const l = this._l === 'null' ? null : this._l;
-            const pool = VOCAB_DATA[quiz.cat].filter(x => !l || x.letter === l).slice(this._s, this._e);
-            const qs = pool.map(q => {
-                const dist = VOCAB_DATA[quiz.cat].filter(x=>x.word!==q.word).sort(()=>0.5-Math.random()).slice(0,3);
-                return { ...q, opts: [...dist, q].sort(()=>0.5-Math.random()) };
-            });
-            quiz._alpha = l;  // so OTHER SETS works
+
+            let qs;
+            if (att.qs && att.qs.length) {
+                // Use the exact saved question pool (correct fix)
+                qs = att.qs;
+            } else {
+                // Legacy fallback for old attempts (no qs saved) — options may not match exactly
+                const l = this._l === 'null' ? null : this._l;
+                const pool = VOCAB_DATA[quiz.cat].filter(x => !l || x.letter === l).slice(this._s, this._e);
+                qs = pool.map(q => {
+                    const dist = VOCAB_DATA[quiz.cat].filter(x=>x.word!==q.word).sort(()=>0.5-Math.random()).slice(0,3);
+                    return { ...q, opts: [...dist, q].sort(()=>0.5-Math.random()) };
+                });
+            }
+
+            quiz._alpha = (this._l === 'null' ? null : this._l);
             const correct = qs.filter((q,i) => att.ans[i] === q.word).length;
             review.load(qs, att.ans, correct);
             ui.show('analysis');
